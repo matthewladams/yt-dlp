@@ -6,6 +6,7 @@ import random
 import string
 import time
 import json
+import os 
 
 from .common import InfoExtractor
 from ..compat import compat_urllib_parse_unquote
@@ -17,6 +18,7 @@ from ..utils import (
     try_get,
     url_or_none,
     qualities,
+    srt_subtitles_timecode,
 )
 
 
@@ -187,6 +189,30 @@ class TikTokBaseIE(InfoExtractor):
         else:
             music_track, music_author = music_info.get('title'), music_info.get('author')
 
+        subtitles = {}
+        interaction_stickers = aweme_detail.get('interaction_stickers', {})
+
+        if interaction_stickers:
+            for interaction_sticker in interaction_stickers:
+                auto_video_caption_info = interaction_sticker.get('auto_video_caption_info', {})
+                auto_captions = auto_video_caption_info.get('auto_captions', {})
+
+                if auto_captions:
+                    for auto_caption in auto_captions:
+                        caption_url = auto_caption.get('url', {})
+                        caption_langauge = auto_caption.get('language', '')
+
+                        for caption_url_link in caption_url['url_list']:
+                            enc_subtitles = self._download_json(
+                            caption_url_link, aweme_id, 'Downloading subtitles location', fatal=False) or '{}'
+                            subtitle_utterances = enc_subtitles.get('utterances', {})
+                            srt = self._format_caption_utterance_to_srt(subtitle_utterances)
+
+                            subtitles.setdefault(subtitles.get('Language', caption_langauge), []).append({
+                                'ext': 'srt',
+                                'data': srt
+                            })
+
         return {
             'id': aweme_id,
             'title': aweme_detail['desc'],
@@ -205,7 +231,8 @@ class TikTokBaseIE(InfoExtractor):
             'timestamp': int_or_none(aweme_detail.get('create_time')),
             'formats': formats,
             'thumbnails': thumbnails,
-            'duration': int_or_none(traverse_obj(video_info, 'duration', ('download_addr', 'duration')), scale=1000)
+            'duration': int_or_none(traverse_obj(video_info, 'duration', ('download_addr', 'duration')), scale=1000),
+            'subtitles': subtitles
         }
 
     def _parse_aweme_video_web(self, aweme_detail, webpage_url):
@@ -280,6 +307,23 @@ class TikTokBaseIE(InfoExtractor):
                 'Referer': webpage_url
             }
         }
+    
+    def _format_caption_utterance_to_srt(self, subtitle_utterances):
+        srt = ''
+        num = 1
+        if subtitle_utterances:
+            for subtitle_line in subtitle_utterances:
+                srt += os.linesep.join(
+                    (
+                        '%d' % num,
+                        '%s --> %s' % (
+                            srt_subtitles_timecode(subtitle_line['start_time'] / 1000.0),
+                            srt_subtitles_timecode(subtitle_line['end_time'] / 1000.0)),
+                        subtitle_line['text'],
+                        os.linesep,
+                    ))
+                num = num + 1
+        return srt
 
 
 class TikTokIE(TikTokBaseIE):
@@ -367,7 +411,6 @@ class TikTokIE(TikTokBaseIE):
             raise ExtractorError('This video is private', expected=True)
 
         raise ExtractorError('Video not available', video_id=video_id)
-
 
 class TikTokUserIE(TikTokBaseIE):
     IE_NAME = 'tiktok:user'
