@@ -208,9 +208,17 @@ class TikTokBaseIE(InfoExtractor):
             'duration': int_or_none(traverse_obj(video_info, 'duration', ('download_addr', 'duration')), scale=1000)
         }
 
-    def _parse_aweme_video_web(self, aweme_detail, webpage_url):
+    def _parse_aweme_video_web(self, aweme_detail, webpage_url, sigiChanges = False):
         video_info = aweme_detail['video']
-        author_info = traverse_obj(aweme_detail, 'author', 'authorInfo', default={})
+        author_info = {}
+        if not sigiChanges:
+            author_info = traverse_obj(aweme_detail, 'author', 'authorInfo', default={})
+        else:
+            author_info = {
+                'nickname': aweme_detail.get('nickname'),
+                'uniqueId': aweme_detail.get('author'),
+                'uploader_id': aweme_detail.get('authorId')
+            }
         music_info = aweme_detail.get('music') or {}
         stats_info = aweme_detail.get('stats') or {}
         user_url = self._UPLOADER_URL_FORMAT % (traverse_obj(author_info,
@@ -353,21 +361,38 @@ class TikTokIE(TikTokBaseIE):
         # If we only call once, we get a 403 when downlaoding the video.
         self._download_webpage(url, video_id)
         webpage = self._download_webpage(url, video_id, note='Downloading video webpage')
-        json_string = self._search_regex(
-            r'id=\"__NEXT_DATA__\"\s+type=\"application\/json\"\s*[^>]+>\s*(?P<json_string_ld>[^<]+)',
-            webpage, 'json_string', group='json_string_ld')
-        json_data = self._parse_json(json_string, video_id)
-        props_data = try_get(json_data, lambda x: x['props'], expected_type=dict)
+        try:
+            json_string = self._search_regex(
+                r'id=\"__NEXT_DATA__\"\s+type=\"application\/json\"\s*[^>]+>\s*(?P<json_string_ld>[^<]+)',
+                webpage, 'json_string', group='json_string_ld')
+            json_data = self._parse_json(json_string, video_id)
+            props_data = try_get(json_data, lambda x: x['props'], expected_type=dict)
 
-        # Chech statusCode for success
-        status = props_data.get('pageProps').get('statusCode')
-        if status == 0:
-            return self._parse_aweme_video_web(props_data['pageProps']['itemInfo']['itemStruct'], url)
-        elif status == 10216:
-            raise ExtractorError('This video is private', expected=True)
+            # Chech statusCode for success
+            status = props_data.get('pageProps').get('statusCode')
+            if status == 0:
+                return self._parse_aweme_video_web(props_data['pageProps']['itemInfo']['itemStruct'], url)
+            elif status == 10216:
+                raise ExtractorError('This video is private', expected=True)
 
-        raise ExtractorError('Video not available', video_id=video_id)
+            raise ExtractorError('Video not available', video_id=video_id)
+        except: 
+            # Tiktok is rolling out a change to use Sigi in place of NextJs - try and handle this
+            json_string = self._search_regex(
+                r'<script[^>]+\bid=["\']sigi-persisted-data[^>]+>window\[\'SIGI_STATE\']=({.+?});window\[',
+                webpage, 'data')
+            json_data = self._parse_json(json_string, video_id)
+            props_data = try_get(json_data, lambda x: x['ItemModule'][video_id], dict)
+            status_data = try_get(json_data, lambda x: x['ItemList']['video'], dict)
 
+            # Chech statusCode for success
+            status = status_data.get('statusCode')
+            if status == 0:
+                return self._parse_aweme_video_web(props_data, url, True)
+            elif status == 10216:
+                raise ExtractorError('This video is private', expected=True)
+
+            raise ExtractorError('Video not available', video_id=video_id)
 
 class TikTokUserIE(TikTokBaseIE):
     IE_NAME = 'tiktok:user'
